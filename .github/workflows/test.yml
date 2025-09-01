@@ -1,0 +1,82 @@
+name: Build with Telegram Timer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-and-telegram-timer:
+    runs-on: ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TG_BOT_TOKEN: 8081255552:AAFALkB3RmJjac4xYieaN2EXJbxqVtoUvb0
+      TG_CHAT_ID: 7811576050
+      GITHUB_API_URL: https://api.github.com
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Get Job ID
+        id: job_id
+        run: |
+          JOBS_JSON=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs")
+
+          JOB_ID=$(echo "$JOBS_JSON" | jq '.jobs[] | select(.name == "build-and-telegram-timer") | .id')
+          echo "JOB_ID=$JOB_ID" >> $GITHUB_OUTPUT
+
+      - name: Send Initial Telegram Message
+        id: telegram_message
+        run: |
+          TEXT="⏱ Build started...\nElapsed: 00:00"
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" \
+            -d text="$TEXT")
+          MESSAGE_ID=$(echo "$RESPONSE" | jq '.result.message_id')
+          echo "MESSAGE_ID=$MESSAGE_ID" >> $GITHUB_OUTPUT
+
+      - name: Start Telegram Timer
+        run: |
+          echo "Starting Telegram timer..."
+
+          JOB_ID=${{ steps.job_id.outputs.JOB_ID }}
+          MESSAGE_ID=${{ steps.telegram_message.outputs.MESSAGE_ID }}
+
+          while true; do
+            JOB_DATA=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "$GITHUB_API_URL/repos/${{ github.repository }}/actions/jobs/$JOB_ID")
+            STATUS=$(echo "$JOB_DATA" | jq -r '.status')
+            STARTED_AT=$(echo "$JOB_DATA" | jq -r '.started_at')
+            NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+            ELAPSED=$(( $(date -d "$NOW" +%s) - $(date -d "$STARTED_AT" +%s) ))
+            MIN=$((ELAPSED / 60))
+            SEC=$((ELAPSED % 60))
+            TEXT="⏱ Build running...\nElapsed: $(printf '%02d:%02d' $MIN $SEC)"
+
+            curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/editMessageText" \
+              -d chat_id="$TG_CHAT_ID" \
+              -d message_id="$MESSAGE_ID" \
+              --data-urlencode text="$TEXT" > /dev/null
+
+            if [[ "$STATUS" == "completed" ]]; then
+              echo "Build completed, exiting timer."
+              break
+            fi
+
+            sleep 10
+          done
+
+          echo "Telegram timer ended."
+
+      - name: Simulate Build (Replace this)
+        run: |
+          echo "Simulating a 65-second build..."
+          sleep 65
+
+      - name: Notify Telegram Completion
+        run: |
+          curl -s -X POST "https://api.telegram.org/bot$TG_BOT_TOKEN/sendMessage" \
+            -d chat_id="$TG_CHAT_ID" \
+            -d text="✅ Build finished successfully in GitHub Actions." > /dev/null
